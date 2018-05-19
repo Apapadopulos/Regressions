@@ -1,0 +1,916 @@
+---
+title: "Featuring Engineering Practice"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+author: Angel Papadopulos MBD O2 IE HST 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# setwd("C:\\Users\\angel\\Dropbox\\IE\\1st Assignement\\house-prices")
+# Sys.setenv(JAVA_HOME='C:\\Program Files\\Java\\jre1.8.0_161')
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(moments)
+library(glmnet)
+library(caret)
+library(FSelector)
+library(dummies)
+```
+
+## What is my goal?
+- I have to predict predict the final price of each home (Therefore, this is a regression task)
+- I have to use the feature engineering techniques explained in class to transform the dataset.
+
+# Data Reading and preparation
+```{r Load Data}
+training_data = read.csv("/media/sf_Virtual_Machine_Shared_Folder/ML II/practice_1/train.csv")
+test_data = read.csv("/media/sf_Virtual_Machine_Shared_Folder/ML II/practice_1/test.csv")
+```
+
+## Combining data for manipulation of factors into dummies
+```{r}
+spIndex = which(names(training_data) == "SalePrice")
+mix_data<- rbind(training_data[,-spIndex], test_data)
+```
+
+```{r}
+#Check for duplicate rows
+length(unique(training_data$Id)) == nrow(training_data)
+```
+
+There is no duplicates so we remove the Id column
+```{r}
+#Remove ID column
+training_data = training_data[ , -which(names(training_data) %in% c("Id"))]
+
+```
+
+## Hunting NAs
+Our dataset is filled with many missing values, therefore, before we can build any predictive model we'll clean our data by filling in all NA's with appropriate values.
+
+Counting columns with null values
+```{r NAs discovery}
+na.cols <- which(colSums(is.na(training_data)) > 0)
+sort(colSums(sapply(training_data[na.cols], is.na)), decreasing = TRUE)
+paste('There are', length(na.cols), 'columns with missing values')
+```
+
+NA imputation:
+```{r Train NA Imputation}
+# Alley : NA means "no alley access"
+mix_data$Alley = factor(mix_data$Alley, levels=c(levels(mix_data$Alley), "None"))
+mix_data$Alley[is.na(mix_data$Alley)] = "None"
+
+mix_data$BedroomAbvGr[is.na(mix_data$BedroomAbvGr)] <- 0
+
+# Bsmt : NA for basement features is "no basement"
+mix_data$BsmtQual = factor(mix_data$BsmtQual, levels=c(levels(mix_data$BsmtQual), "No"))
+mix_data$BsmtQual[is.na(mix_data$BsmtQual)] = "No"
+
+mix_data$BsmtCond = factor(mix_data$BsmtCond, levels=c(levels(mix_data$BsmtCond), "No"))
+mix_data$BsmtCond[is.na(mix_data$BsmtCond)] = "No"
+
+mix_data$BsmtExposure[is.na(mix_data$BsmtExposure)] = "No"
+
+mix_data$BsmtFinType1 = factor(mix_data$BsmtFinType1, levels=c(levels(mix_data$BsmtFinType1), "No"))
+mix_data$BsmtFinType1[is.na(mix_data$BsmtFinType1)] = "No"
+
+mix_data$BsmtFinType2 = factor(mix_data$BsmtFinType2, levels=c(levels(mix_data$BsmtFinType2), "No"))
+mix_data$BsmtFinType2[is.na(mix_data$BsmtFinType2)] = "No"
+
+# Fence : NA means "no fence"
+mix_data$Fence = factor(mix_data$Fence, levels=c(levels(mix_data$Fence), "No"))
+mix_data$Fence[is.na(mix_data$Fence)] = "No"
+
+# FireplaceQu : NA means "no fireplace"
+mix_data$FireplaceQu = factor(mix_data$FireplaceQu, levels=c(levels(mix_data$FireplaceQu), "No"))
+mix_data$FireplaceQu[is.na(mix_data$FireplaceQu)] = "No"
+
+# Garage : NA for garage features is "no garage"
+mix_data$GarageType = factor(mix_data$GarageType, levels=c(levels(mix_data$GarageType), "No"))
+mix_data$GarageType[is.na(mix_data$GarageType)] = "No"
+
+mix_data$GarageFinish = factor(mix_data$GarageFinish, levels=c(levels(mix_data$GarageFinish), "No"))
+mix_data$GarageFinish[is.na(mix_data$GarageFinish)] = "No"
+
+mix_data$GarageQual = factor(mix_data$GarageQual, levels=c(levels(mix_data$GarageQual), "No"))
+mix_data$GarageQual[is.na(mix_data$GarageQual)] = "No"
+
+mix_data$GarageCond = factor(mix_data$GarageCond, levels=c(levels(mix_data$GarageCond), "No"))
+mix_data$GarageCond[is.na(mix_data$GarageCond)] = "No"
+
+# LotFrontage : NA most likely means no lot frontage
+mix_data$LotFrontage[is.na(mix_data$LotFrontage)] <- 0
+
+# BasementFullBathroom 
+mix_data$BsmtHalfBath[is.na(mix_data$BsmtHalfBath)] <- 0
+
+# BasementFullBathroom 
+mix_data$BsmtFullBath[is.na(mix_data$BsmtFullBath)] <- 0
+
+# MasVnrType : NA most likely means no veneer
+mix_data$MasVnrType[is.na(mix_data$MasVnrType)] = "None"
+mix_data$MasVnrArea[is.na(mix_data$MasVnrArea)] <- 0
+
+# MiscFeature : NA = "no misc feature"
+mix_data$MiscFeature = factor(mix_data$MiscFeature, levels=c(levels(mix_data$MiscFeature), "No"))
+mix_data$MiscFeature[is.na(mix_data$MiscFeature)] = "No"
+
+# PoolQC : data description says NA means "no pool"
+mix_data$PoolQC = factor(mix_data$PoolQC, levels=c(levels(mix_data$PoolQC), "No"))
+mix_data$PoolQC[is.na(mix_data$PoolQC)] = "No"
+
+# Electrical : NA means "UNK"
+mix_data$Electrical = factor(mix_data$Electrical, levels=c(levels(mix_data$Electrical), "UNK"))
+mix_data$Electrical[is.na(mix_data$Electrical)] = "UNK"
+
+# GarageYrBlt: It seems reasonable that most houses would build a garage when the house itself was built.
+idx <- which(is.na(mix_data$GarageYrBlt))
+mix_data[idx, 'GarageYrBlt'] <- mix_data[idx, 'YearBuilt']
+
+na.cols <- which(colSums(is.na(mix_data)) > 0)
+paste('There are now', length(na.cols), 'columns with missing values, they are the columns with NAs from test data that appear in columns that do not appear on training_data. They will be dealt with at the end of the code')
+sort(colSums(sapply(mix_data[na.cols], is.na)), decreasing = TRUE)
+
+
+
+
+
+
+
+```
+
+## Factorize features
+Some numerical features are actually really categories. Therefore we transform the feature from numeric to categorical
+
+```{r Factorize features}
+
+mix_data$MSSubClass <- as.factor(mix_data$MSSubClass)
+mix_data$MoSold <- as.factor(mix_data$MoSold)
+
+```
+
+##New Variables##
+```{r}
+
+####Create TotalBuiltArea####
+
+mix_data$TotBuiltSF<- mix_data$X1stFlrSF + mix_data$X2ndFlrSF + mix_data$TotalBsmtSF + mix_data$GarageArea + mix_data$WoodDeckSF + mix_data$OpenPorchSF + mix_data$EnclosedPorch + mix_data$X3SsnPorch + mix_data$ScreenPorch + mix_data$PoolArea
+
+####Create TotalBathrooms####
+
+mix_data$TtlBthrms<- ((mix_data$BsmtHalfBath + mix_data$HalfBath)*0.5) + mix_data$BsmtFullBath + mix_data$FullBath
+
+```
+
+##Dummy creation for entire data set
+```{r}
+
+mix_data<- dummy.data.frame(mix_data)
+
+```
+
+
+#split back into training_data and test_data
+```{r}
+
+training_data<- cbind(mix_data[1:1460,], SalePrice = training_data[,"SalePrice"])
+test_data<- cbind(Id= test_data[,"Id"], mix_data[1461:2919,])
+```
+
+
+
+## Skewness
+
+If we print the histogram of the target value, we obseve a large skewness in the Target value (i.e., the distribution in not normally distributed).
+To solve that we log transform this variable so that it becomes normally distributed. A normally distributed target variable helps in the modeling step (i.e., the finding of the relationship between target and independent variables).
+```{r}
+# get data frame of SalePrice and log(SalePrice + 1) for plotting
+df <- rbind(data.frame(version="log(price+1)",x=log(training_data$SalePrice + 1)),
+            data.frame(version="price",x=training_data$SalePrice))
+
+ggplot(data=df) +
+  facet_wrap(~version,ncol=2,scales="free_x") +
+  geom_histogram(aes(x=x), bins = 50)
+```
+
+
+
+We therefore transform the target value applying log.
+```{r Log transform the target for official scoring}
+# Log transform the target for official scoring
+training_data$SalePrice <- log1p(training_data$SalePrice)
+```
+
+
+The same "skewness" observed in the target variable also affects other variables. To facilitate the application of the regression model we are going to also eliminate this skewness
+For numeric feature with excessive skewness, perform log transformation
+```{r}
+
+column_types <- sapply(names(training_data),function(x){class(training_data[[x]])})
+numeric_columns <-names(column_types[column_types != "factor"])
+
+# skew of each variable
+skew <- sapply(numeric_columns,function(x){skewness(training_data[[x]],na.rm = T)})
+skew <- skew[!is.na(skew)]
+
+
+# transform all variables above a threshold skewness.
+skew <- skew[abs(skew) > 0.5]
+for(x in names(skew)) {
+  training_data[[x]] <- log(training_data[[x]] + 1)
+  #added the line for test data to make sure that the transformation happens on both sets for the same variable name
+  test_data[[x]] <- log(test_data[[x]] + 1)
+  
+}
+```
+
+### Remove Outliers
+```{r Remove Outliers}
+#Outlier on GrLivArea###
+
+training_data<- training_data[-which(training_data$GrLivArea> 8.3 & training_data$SalePrice< 12.5),]
+ggplot(training_data, aes(y = SalePrice, x = GrLivArea)) + geom_point()
+
+
+
+
+
+```
+
+
+## Train, Validation Spliting
+We are going to split the annotated dataset in training and validation for the later evaluation of our regression models
+```{r Train test split}
+# I found this function, that is worth to save for future ocasions.
+splitdf <- function(dataframe, seed=NULL) {
+  if (!is.null(seed)) set.seed(seed)
+ 	index <- 1:nrow(dataframe)
+ 	trainindex <- sample(index, trunc(length(index)/1.5))
+ 	trainset <- dataframe[trainindex, ]
+ 	testset <- dataframe[-trainindex, ]
+ 	list(trainset=trainset,testset=testset)
+}
+splits <- splitdf(training_data, seed=1)
+training <- splits$trainset
+validation <- splits$testset
+```
+
+If we inspect in detail the categorical variables of the dataset, we'll see that some are incomplete: they only have a unique value for all the dataset.
+These features are not valuable. Remember the three aspects that a feature should have: informative, <b>discriminative</b> and independent. Incomplete cases are not discriminative at all.
+In addition, this might create problems when fitting the regression model
+
+The following code show the incomplete cases
+```{r}
+## remove incomplete cases
+paste("Training set incomplete cases")
+sapply(lapply(na.omit(training)[sapply(na.omit(training), is.factor)], droplevels), nlevels)
+paste("Validation set incomplete cases")
+sapply(lapply(na.omit(validation)[sapply(na.omit(validation), is.factor)], droplevels), nlevels)
+paste("Test set incomplete cases")
+sapply(lapply(na.omit(test_data)[sapply(na.omit(test_data), is.factor)], droplevels), nlevels)
+```
+
+Re-order datasets to make sure they match the code from below.
+```{r}
+#make sale price the last column
+
+training <- training[ ,c(colnames(training)[colnames(training)!='SalePrice'],'SalePrice')]
+
+validation <- validation[ ,c(colnames(validation)[colnames(validation)!='SalePrice'],'SalePrice')]
+
+```
+
+
+# Feature Engineering
+
+## Filtering Methods
+We will rank the features according to their predictive power according to the methodologies seen in class: the Chi Squared Independence test and the Information Gain.
+
+#### Full Model
+We first fit a lm model with all the features to have a baseline to evaluate the impact of the feature engineering.
+```{r Full Regression model, message=FALSE, warning=FALSE}
+
+  set.seed(121)
+  train_control_config <- trainControl(method = "repeatedcv", 
+                         number = 5, 
+                         repeats = 1,
+                         returnResamp = "all")
+  
+  full.lm.mod <- train(SalePrice ~ ., data = training, 
+                 method = "lm", 
+                 metric = "RMSE",
+                 preProc = c("center", "scale"),
+                 trControl=train_control_config)
+  
+  for (x in names(validation)) {
+    full.lm.mod$xlevels[[x]] <- union(full.lm.mod$xlevels[[x]], levels(validation[[x]]))
+  }
+  full.lm.mod.pred <- predict(full.lm.mod, validation[,-ncol(validation)])
+  full.lm.mod.pred[is.na(full.lm.mod.pred)] <- 0
+  
+  my_data=as.data.frame(cbind(predicted=full.lm.mod.pred,observed=validation$SalePrice))
+  
+  ggplot(my_data,aes(predicted,observed))+
+    geom_point() + geom_smooth(method = "lm") +
+    labs(x="Predicted") +
+    ggtitle('Linear Model')
+  
+  paste("Full Linear Regression RMSE = ", sqrt(mean((full.lm.mod.pred - validation$SalePrice)^2)))
+```
+
+### Chi-squared Selection
+Making use of the `FSelector` package <https://cran.r-project.org/web/packages/FSelector/FSelector.pdf>, rank the features according to the Chi Squared value. If you've problems with this package (some of us have problems with it), do some research to find another packages that will provide the Chi squared selection.
+
+Does it make sense to remove some features? Is so, do it! <b>(Tip: Sure it does)</b>
+```{r}
+weights<- data.frame(chi.squared(SalePrice~., training_data))
+weights$feature <- rownames(weights)
+weights[order(weights$attr_importance, decreasing = TRUE),]
+chi_squared_features <- weights$feature[weights$attr_importance >= 0.095]
+```
+#### Evaluation
+Evaluate the impact (in terms of RMSE) of the feature selection.
+To that end, execute the previous LM model taking as input the filtered training set
+```{r Chi-Squared Regression, message=FALSE, warning=FALSE}
+chi_squared.lm.mod <- train(SalePrice ~ ., data = training[append(chi_squared_features, "SalePrice")], 
+               method = "lm", 
+               metric = "RMSE",
+               preProc = c("center", "scale"),
+               trControl=train_control_config)
+
+for (x in names(validation)) {
+  chi_squared.lm.mod$xlevels[[x]] <- union(chi_squared.lm.mod$xlevels[[x]], levels(validation[[x]]))
+}
+chi_squared.lm.mod.pred <- predict(chi_squared.lm.mod, validation[,-ncol(validation)])
+chi_squared.lm.mod.pred[is.na(chi_squared.lm.mod.pred)] <- 0
+
+my_data=as.data.frame(cbind(predicted=chi_squared.lm.mod.pred,observed=validation$SalePrice))
+
+ggplot(my_data,aes(predicted,observed))+
+  geom_point() + geom_smooth(method = "lm") +
+  labs(x="Predicted") +
+  ggtitle('Linear Model')
+
+paste("Chi-Squared Filtered Linear Regression RMSE = ", sqrt(mean((chi_squared.lm.mod.pred - validation$SalePrice)^2)))
+```
+
+### Information Gain Selection
+Let's experiment now with Information Gain Selection.
+Making also use of the `FSelector` package <https://cran.r-project.org/web/packages/FSelector/FSelector.pdf>, rank the features according to their Information Gain and filter those which you consider, according to the IG value.
+
+Again, there're more alternatives to compute the IG.
+```{r}
+# weights<- data.frame(information.gain(SalePrice~., training_data))
+# weights$feature <- rownames(weights)
+# weights[order(weights$attr_importance, decreasing = TRUE),]
+# information_gain_features <- weights$feature[weights$attr_importance >= 0.05]
+```
+
+#### Evaluation
+Evaluate the impact of the IG selection in the model performance
+```{r Information Gain Regression Model, message=FALSE, warning=FALSE}
+# ig.lm.mod <- train(SalePrice ~ ., data = training[append(information_gain_features, "SalePrice")], 
+#                method = "lm", 
+#                metric = "RMSE",
+#                preProc = c("center", "scale"),
+#                trControl=train_control_config)
+# 
+# for (x in names(validation)) {
+#   ig.lm.mod$xlevels[[x]] <- union(ig.lm.mod$xlevels[[x]], levels(validation[[x]]))
+# }
+# ig.lm.mod.pred <- predict(ig.lm.mod, validation[,-ncol(validation)])
+# ig.lm.mod.pred[is.na(ig.lm.mod.pred)] <- 0
+# 
+# my_data=as.data.frame(cbind(predicted=ig.lm.mod.pred,observed=validation$SalePrice))
+# 
+# ggplot(my_data,aes(predicted,observed))+
+#   geom_point() + geom_smooth(method = "lm") +
+#   labs(x="Predicted") +
+#   ggtitle('Linear Model')
+# 
+# paste("IG Filtered Linear Regression RMSE = ", sqrt(mean((ig.lm.mod.pred - validation$SalePrice)^2)))
+```
+
+Using the result of the evaluation, filter the dataset (according to the method and cutoff that you decide)
+
+Based on these results, we filter the training and validation set with the Information Gain features.
+```{r}
+training <- training[append(chi_squared_features, "SalePrice")]
+validation <- validation[append(chi_squared_features, "SalePrice")]
+```
+
+## Wrapper Methods
+Let us experiment now with Wrapper Methods. In particular, we are going to apply Forward Stepwise Selection Methods to find the best feature combination for this dataset.
+
+### Stepwise
+
+
+#### Backward Stepwise
+`caret` package provides a useful and easy way of experimenting with stepwise selection. Try it to know what a wrapper method suggests as the best possible subset of features and compare your results with the baseline.
+```{r Backward Stepwise, message=FALSE, warning=FALSE}
+
+# train_control_config_4_stepwise <- trainControl(method = "none")
+# 
+# backward.lm.mod <- train(SalePrice ~ ., data = training, 
+#                method = "glmStepAIC", 
+#                direction = "backward",
+#                trace = FALSE,
+#                metric = "RMSE",
+#                steps = 15,
+#                preProc = c("center", "scale"),
+#                trControl=train_control_config_4_stepwise)
+```
+
+Printout only the selected features.
+```{r}
+#paste("Features Selected" ,backward.lm.mod$finalModel$formula[3])
+```
+
+Comput the RMSE of the selected model
+```{r}
+# for (x in names(validation)) {
+#   backward.lm.mod$xlevels[[x]] <- union(backward.lm.mod$xlevels[[x]], levels(validation[[x]]))
+# }
+# backward.lm.mod.pred <- predict(backward.lm.mod, validation[,-ncol(validation)])
+# backward.lm.mod.pred[is.na(backward.lm.mod.pred)] <- 0
+# 
+# 
+# 
+# paste("Forward Linear Regression RMSE = ", sqrt(mean((backward.lm.mod.pred - validation$SalePrice)^2)))
+# 
+# my_data=as.data.frame(cbind(predicted=backward.lm.mod.pred,observed=validation$SalePrice))
+# ggplot(my_data,aes(predicted,observed))+
+#   geom_point() + geom_smooth(method = "lm") +
+#   labs(x="Predicted") +
+#   ggtitle('Linear Model')
+```
+
+#### Forward Stepwise
+
+Try the same with forward stepwise.
+
+```{r Forward Stepwise, message=FALSE, warning=FALSE}
+# forward.lm.mod <- step(glm(training$SalePrice ~ 1, data = training[,-ncol(training)]), direction = "forward", scope=formula(glm(training$SalePrice ~ ., data = training[,-ncol(training)])))
+# 
+# forward.lm.mod <- train(x = training[-ncol(training)], y = training$SalePrice,
+#                                        method = "glmStepAIC", 
+#                                        direction = "forward",
+#                                        steps = 10,
+#                                        trace=FALSE,
+#                                        metric = "RMSE",
+#                                        preProc = c("center", "scale"),
+#                         trControl=train_control_config_4_stepwise)
+
+
+```
+
+Printout only the selected features.
+```{r}
+#paste("Features Selected" ,forward.lm.mod$finalModel$formula[3])
+
+```
+
+Compute the new RMSE
+
+```{r}
+# for (x in names(validation)) {
+#   forward.lm.mod$xlevels[[x]] <- union(forward.lm.mod$xlevels[[x]], levels(validation[[x]]))
+# }
+# 
+# forward.lm.mod.pred <- predict(forward.lm.mod, validation[,-which(names(validation) %in% c("SalePrice"))])
+# forward.lm.mod.pred[is.na(forward.lm.mod.pred)] <- 0
+# 
+# 
+# 
+# paste("Forward Linear Regression RMSE = ", sqrt(mean((forward.lm.mod.pred - validation$SalePrice)^2)))
+# 
+# my_data=as.data.frame(cbind(predicted=forward.lm.mod.pred,observed=validation$SalePrice))
+# ggplot(my_data,aes(predicted,observed))+
+#   geom_point() + geom_smooth(method = "lm") +
+#   labs(x="Predicted") +
+#   ggtitle('Linear Model')
+```
+
+
+```{r}
+#forward_features <- c("OverallQual", "Neighborhood", "GrLivArea", "BsmtFinSF1" ,"MSSubClass", "OverallCond", "GarageCars", "YearBuilt", "LotArea", "MSZoning")
+```
+
+
+## Embedded
+Finally, we will experiment with embedded methods. 
+In particular we are going to focus on Ridge and  Lasso Regularization.
+
+### Ridge Regression
+For this exercise, we are going to make use of the <a href="https://cran.r-project.org/web/packages/glmnet/index.html">`glmnet`</a> library. Take a look to the library and fit a glmnet model for Ridge Regression, using the grid of lambda values provided.
+```{r Ridge Regression, warning=FALSE}
+lambdas <- 10^seq(-2, 4, by = .1)
+ridge.mod <- glmnet(x = data.matrix(training[,-ncol(training)]), y=training$SalePrice, alpha = 0, lambda = lambdas)
+```
+
+#### Evaluation
+Plotting the RMSE for the different lambda values, we can see the impact of this parameter in the model performance.
+Small values seem to work better for this dataset
+```{r Ridge Evaluation}
+RMSE = numeric(length(lambdas))
+for (i in seq_along(lambdas)){
+  ridge.pred=predict(ridge.mod, s=lambdas[i], data.matrix(validation[,-ncol(validation)]))
+  RMSE[i] <- sqrt(mean((ridge.pred - validation$SalePrice)^2))
+}
+plot(lambdas, RMSE, main="Ridge", log="x", type = "b")
+
+```
+
+
+##### Cross Validation
+Making use of cv.glmnet <https://www.rdocumentation.org/packages/glmnet/versions/2.0-12/topics/cv.glmnet>, create a cross-validated Ridge Regression Model for the provided lambdas.
+
+Plotting again the error, CV give us a better understanding on the impact of lambda in the model performance
+```{r}
+ridge.cv_fit <- cv.glmnet(x = data.matrix(training[,-ncol(training)]), y=training$SalePrice, alpha = 0, lambda = lambdas)
+plot(ridge.cv_fit)
+```
+
+<b>Interpretation:</b>
+
+1. The plot shows the MSE (red dots) for the provided lambda values (included in the grid).
+2. The confidence intervals represent error estimates for the RSE, computed using CV. 
+3. The vertical lines show the locations of lambda.min (lambda that achives the best MSE) and lambda.1se (the largest lambda value within 1 standard error of lambda.min. Using lambda.1se hedges against overfitting by selecting a larger lambda value than the min).
+4. The numbers across the top are the number of nonzero coefficient estimates.
+
+Select the best lambda form the CV model, use it to predict the target value of the validation set and evaluate the results (in terms of RMSE)
+```{r}
+bestlam <- ridge.cv_fit$lambda.min
+paste("Best Lambda value from CV=", bestlam)
+ridge.pred=predict(ridge.mod, s=bestlam, data.matrix(validation[,-ncol(validation)]))
+paste("RMSE for lambda ", bestlam, " = ", sqrt(mean((ridge.pred - validation$SalePrice)^2)))
+```
+
+
+Select the λ1se value from the CV model to predict on the validation set
+```{r}
+lam1se <- ridge.cv_fit$lambda.1se
+paste("Lambda 1se value from CV=", lam1se)
+ridge.pred=predict(ridge.mod, s=lam1se, data.matrix(validation[,-ncol(validation)]))
+paste("RMSE for lambda ", lam1se, " = ", sqrt(mean((ridge.pred - validation$SalePrice)^2)))
+```
+As you can see, the result is almost the same, but the 1se value is less prone to overfitting
+
+Let's plot the predictions against the actual values to have an idea of the model performance
+```{r}
+# Plot important coefficients
+my_data=as.data.frame(cbind(predicted=ridge.pred,observed=validation$SalePrice))
+
+ggplot(my_data,aes(my_data["1"],observed))+
+  geom_point()+geom_smooth(method="lm")+
+  scale_x_continuous(expand = c(0,0)) +
+  labs(x="Predicted") +
+  ggtitle('Ridge')
+```
+
+Rank the variables according to the importance attributed by the model
+```{r}
+
+# Print, plot variable importance
+imp <- varImp(ridge.mod, lambda = bestlam)
+names <- rownames(imp)[order(imp$Overall, decreasing=TRUE)]
+importance <- imp[names,]
+
+data.frame(row.names = names, importance)
+
+```
+
+
+###Ridge Prediction on Test Data
+```{r}
+log_prediction_r <- predict(ridge.cv_fit,  s=ridge.cv_fit$lambda.min, newx = data.matrix(test_data[chi_squared_features]))
+actual_pred_r <- exp(log_prediction_r)-1
+hist(actual_pred_r)
+submit_r <- data.frame(Id=test_data$Id,SalePrice=actual_pred_r)
+colnames(submit_r) <-c("Id", "SalePrice")
+
+submit_r$SalePrice[is.na(submit_r$SalePrice)] <- 0
+
+important_variables_r<- c('GrLivArea', 'YearBuilt',  'SalePrice')
+replace_value_for_na_regression_r <- train(SalePrice ~ ., data = training[,important_variables_r], 
+               method = "lm", 
+               metric = "RMSE",
+               preProc = c("center", "scale"),
+               trControl=train_control_config)
+
+replace_value_for_na_regression_predict_r <- predict(replace_value_for_na_regression_r, test_data)
+actual_replace_value_for_na_regression_predict_r <- exp(replace_value_for_na_regression_predict_r)-1
+
+for (i in 1:nrow(submit_r))
+{
+  if (submit_r$SalePrice[i]==0)
+  {
+    submit_r$SalePrice[i]<- actual_replace_value_for_na_regression_predict_r[i]
+  }
+}
+
+submit_ridge<- submit_r
+
+#write.csv(submit_ridge,file="ridge_information_gain_V11.0.csv",row.names=F)
+```
+
+### Lasso Regresion
+Using again the <a href="https://cran.r-project.org/web/packages/glmnet/index.html">`glmnet`</a> library, fit a Lasso Regression (take a look to the alpha parameter) using the grid of lambda values provided.
+
+#### Evaluation
+Plot the RMSE for the different lambda values and Explain the results.
+```{r}
+lambdas <- 10^seq(-3, 3, by = .1)
+
+lasso.cv_fit <- cv.glmnet(x = data.matrix(training[,-ncol(training)]), y=training$SalePrice, alpha = 1, lambda = lambdas)
+plot(lasso.cv_fit)
+```
+
+
+<b>Interpretation:</b>
+As said in class, In contrast to Ridge Regression, Lasso Regression performs feature selection (it is forcing the coefficients to be 0), as you can see in the top numbers in the plot.
+
+
+Select the best lambda form the CV model, use it to predict the target value of the validation set and evaluate the results (in terms of RMSE)
+```{r}
+bestlam <- lasso.cv_fit$lambda.min
+paste("Best Lambda value from CV=", bestlam)
+lasso.mod <- glmnet(x = data.matrix(training[,-ncol(training)]), y=training$SalePrice, alpha = 1, lambda = lambdas)
+lasso.pred=predict(lasso.mod, s=bestlam, data.matrix(validation[,-ncol(validation)]))
+paste("RMSE for lambda ", bestlam, " = ", sqrt(mean((lasso.pred - validation$SalePrice)^2)))
+```
+
+Select the λ1se value from the CV model to predict on the validation set
+```{r}
+# lam1se <- lasso.cv_fit$lambda.1se
+# paste("Lambda 1se value from CV=", lam1se)
+# lasso.mod <- glmnet(x = data.matrix(training[,-ncol(training)]), y=training$SalePrice, alpha = 1, lambda = lambdas)
+# lasso.pred=predict(lasso.mod, s=lam1se, data.matrix(validation[,-ncol(validation)]))
+# paste("RMSE for lambda ", lam1se, " = ", sqrt(mean((lasso.pred - validation$SalePrice)^2)))
+```
+
+Predictions against the actual values 
+```{r}
+# Plot important coefficients
+my_data=as.data.frame(cbind(predicted=lasso.pred,observed=validation$SalePrice))
+
+ggplot(my_data,aes(my_data["1"],observed))+
+  geom_point()+geom_smooth(method="lm")+
+  scale_x_continuous(expand = c(0,0)) +
+  labs(x="Predicted") +
+  ggtitle('Lasso')
+```
+
+Variable importance
+```{r}
+# Print, plot variable importance
+imp <- varImp(lasso.mod, lambda = bestlam)
+names <- rownames(imp)[order(imp$Overall, decreasing=TRUE)]
+importance <- imp[names,]
+
+data.frame(row.names = names, importance)
+
+```
+
+Variables selected by the lasso model (only those with importance larger than 0)
+```{r}
+filtered_names <- rownames(imp)[order(imp$Overall, decreasing=TRUE)][1:28]
+print(filtered_names)
+```
+
+
+# Prediction on the test data for Lasso
+
+```{r}
+
+log_prediction <- predict(lasso.cv_fit,  s=lasso.cv_fit$lambda.min, newx = data.matrix(test_data[chi_squared_features]))
+actual_pred <- exp(log_prediction)-1
+hist(actual_pred)
+submit <- data.frame(Id=test_data$Id,SalePrice=actual_pred)
+colnames(submit) <-c("Id", "SalePrice")
+
+submit$SalePrice[is.na(submit$SalePrice)] <- 0
+
+important_variables<- c('GrLivArea', 'YearBuilt',  'SalePrice')
+replace_value_for_na_regression <- train(SalePrice ~ ., data = training[,important_variables], 
+               method = "lm", 
+               metric = "RMSE",
+               preProc = c("center", "scale"),
+               trControl=train_control_config)
+
+replace_value_for_na_regression_predict <- predict(replace_value_for_na_regression, test_data)
+actual_replace_value_for_na_regression_predict <- exp(replace_value_for_na_regression_predict)-1
+
+for (i in 1:nrow(submit))
+{
+  if (submit$SalePrice[i]==0)
+  {
+    submit$SalePrice[i]<- actual_replace_value_for_na_regression_predict[i]
+  }
+}
+
+submit_lasso<- submit
+
+#write.csv(submit_lasso,file="lasso_information_gain_V11.0.csv",row.names=F)
+```
+
+
+
+
+### ElasticNet Regresion
+Using again the <a href="https://cran.r-project.org/web/packages/glmnet/index.html">`glmnet`</a> library, fit an elastic net Regression (take a look to the alpha parameter) using the grid of lambda values provided.
+
+#### Evaluation
+Plot the RMSE for the different lambda values and Explain the results.
+```{r}
+lambdas <- 10^seq(-3, 3, by = .1)
+
+elastic.cv_fit <- cv.glmnet(x = data.matrix(training[,-ncol(training)]), y=training$SalePrice, alpha = 0.5, lambda = lambdas)
+plot(elastic.cv_fit)
+```
+
+<b>Interpretation:</b>
+Elastic Net is a mix of both lasso and ridge, so it reduces size and number of betas. 
+
+
+Select the best lambda form the CV model, use it to predict the target value of the validation set and evaluate the results (in terms of RMSE)
+```{r}
+bestlam <- elastic.cv_fit$lambda.min
+paste("Best Lambda value from CV=", bestlam)
+elastic.mod <- glmnet(x = data.matrix(training[,-ncol(training)]), y=training$SalePrice, alpha = 0.5, lambda = lambdas)
+elastic.pred=predict(elastic.mod, s=bestlam, data.matrix(validation[,-ncol(validation)]))
+paste("RMSE for lambda ", bestlam, " = ", sqrt(mean((elastic.pred - validation$SalePrice)^2)))
+```
+
+
+Predictions against the actual values 
+```{r}
+# Plot important coefficients
+my_data=as.data.frame(cbind(predicted=elastic.pred,observed=validation$SalePrice))
+
+ggplot(my_data,aes(my_data["1"],observed))+
+  geom_point()+geom_smooth(method="lm")+
+  scale_x_continuous(expand = c(0,0)) +
+  labs(x="Predicted") +
+  ggtitle('ElasticNet')
+```
+
+Variable importance
+```{r}
+# Print, plot variable importance
+imp <- varImp(elastic.mod, lambda = bestlam)
+names <- rownames(imp)[order(imp$Overall, decreasing=TRUE)]
+importance <- imp[names,]
+
+data.frame(row.names = names, importance)
+
+```
+
+
+Variables selected by the elastic model (only those with importance larger than 0)
+```{r}
+filtered_names <- rownames(imp)[order(imp$Overall, decreasing=TRUE)][1:28]
+print(filtered_names)
+```
+
+# Prediction on the test data for elastic net
+
+```{r}
+
+log_prediction_e <- predict(elastic.cv_fit,  s=elastic.cv_fit$lambda.min, newx = data.matrix(test_data[chi_squared_features]))
+actual_pred_e <- exp(log_prediction_e)-1
+hist(actual_pred_e)
+submit_e <- data.frame(Id=test_data$Id,SalePrice=actual_pred_e)
+colnames(submit_e) <-c("Id", "SalePrice")
+
+submit_e$SalePrice[is.na(submit_e$SalePrice)] <- 0
+
+important_variables<- c('GrLivArea', 'YearBuilt',  'SalePrice')
+replace_value_for_na_regression_e <- train(SalePrice ~ ., data = training[,important_variables], 
+               method = "lm", 
+               metric = "RMSE",
+               preProc = c("center", "scale"),
+               trControl=train_control_config)
+
+replace_value_for_na_regression_predict_e <- predict(replace_value_for_na_regression_e, test_data)
+actual_replace_value_for_na_regression_predict_e <- exp(replace_value_for_na_regression_predict_e)-1
+
+for (i in 1:nrow(submit_e))
+{
+  if (submit_e$SalePrice[i]==0)
+  {
+    submit_e$SalePrice[i]<- actual_replace_value_for_na_regression_predict_e[i]
+  }
+}
+
+submit_elastic<- submit_e
+
+#write.csv(submit_elastic,file="elastic_information_gain_V11.0.csv",row.names=F)
+```
+
+
+#Final Model: Lasso Regression
+
+```{r}
+#Use the whole trainingn dataset to train final model. 
+
+training <- rbind(training, validation)
+```
+
+
+
+#### Evaluation
+Plot the RMSE for the different lambda values and Explain the results.
+```{r}
+lambdas <- 10^seq(-3, 3, by = .1)
+
+lasso.cv_fit <- cv.glmnet(x = data.matrix(training[,-ncol(training)]), y=training$SalePrice, alpha = 1, lambda = lambdas)
+plot(lasso.cv_fit)
+```
+
+
+<b>Interpretation:</b>
+As said in class, In contrast to Ridge Regression, Lasso Regression performs feature selection (it is forcing the coefficients to be 0), as you can see in the top numbers in the plot.
+
+
+Select the best lambda form the CV model, use it to predict the target value of the validation set and evaluate the results (in terms of RMSE)
+```{r}
+bestlam <- lasso.cv_fit$lambda.min
+paste("Best Lambda value from CV=", bestlam)
+lasso.mod <- glmnet(x = data.matrix(training[,-ncol(training)]), y=training$SalePrice, alpha = 1, lambda = lambdas)
+lasso.pred=predict(lasso.mod, s=bestlam, data.matrix(validation[,-ncol(validation)]))
+paste("RMSE for lambda ", bestlam, " = ", sqrt(mean((lasso.pred - validation$SalePrice)^2)))
+```
+
+Predictions against the actual values 
+```{r}
+# Plot important coefficients
+my_data=as.data.frame(cbind(predicted=lasso.pred,observed=validation$SalePrice))
+
+ggplot(my_data,aes(my_data["1"],observed))+
+  geom_point()+geom_smooth(method="lm")+
+  scale_x_continuous(expand = c(0,0)) +
+  labs(x="Predicted") +
+  ggtitle('Lasso')
+```
+
+Variable importance
+```{r}
+# Print, plot variable importance
+imp <- varImp(lasso.mod, lambda = bestlam)
+names <- rownames(imp)[order(imp$Overall, decreasing=TRUE)]
+importance <- imp[names,]
+
+data.frame(row.names = names, importance)
+
+```
+
+Variables selected by the lasso model (only those with importance larger than 0)
+```{r}
+filtered_names <- rownames(imp)[order(imp$Overall, decreasing=TRUE)][1:28]
+print(filtered_names)
+```
+
+
+# Prediction on the test data for Lasso
+
+```{r}
+
+log_prediction <- predict(lasso.cv_fit,  s=lasso.cv_fit$lambda.min, newx = data.matrix(test_data[chi_squared_features]))
+actual_pred <- exp(log_prediction)-1
+hist(actual_pred)
+submit <- data.frame(Id=test_data$Id,SalePrice=actual_pred)
+colnames(submit) <-c("Id", "SalePrice")
+
+submit$SalePrice[is.na(submit$SalePrice)] <- 0
+
+important_variables<- c('GrLivArea', 'YearBuilt',  'SalePrice')
+replace_value_for_na_regression <- train(SalePrice ~ ., data = training[,important_variables], 
+               method = "lm", 
+               metric = "RMSE",
+               preProc = c("center", "scale"),
+               trControl=train_control_config)
+
+replace_value_for_na_regression_predict <- predict(replace_value_for_na_regression, test_data)
+actual_replace_value_for_na_regression_predict <- exp(replace_value_for_na_regression_predict)-1
+
+for (i in 1:nrow(submit))
+{
+  if (submit$SalePrice[i]==0)
+  {
+    submit$SalePrice[i]<- actual_replace_value_for_na_regression_predict[i]
+  }
+}
+
+submit_lasso<- submit
+
+write.csv(submit_lasso,file="lasso_information_gain_GH.csv",row.names=F)
+
+
+
+
